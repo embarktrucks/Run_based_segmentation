@@ -1,0 +1,25 @@
+<launch>
+<node pkg="points_preprocessor_usi" type="groundplanfit" name="filter_left_velodyne" output="screen">
+<rosparam>
+point_topic: "/vstl/velodyne_points"
+no_ground_point_topic: "/vstl/non_ground"
+ground_point_topic: "/vstl/ground"
+sensor_height: 1.44
+th_dist: 0.3
+</rosparam>
+</node>
+
+<!-- Problem with the right side, sometimes we see too much of the landscape to the right and not enough road in comparison somehow. -->
+<!-- We could probably solve this by setting seed points for the segmentation in front of the vehicle -->
+<!-- E.g. embite play 201 2019/08/08/18/46/25 20 -->
+<node pkg="points_preprocessor_usi" type="groundplanfit" name="filter_right_velodyne" output="screen">
+<rosparam>
+point_topic: "/vstr/velodyne_points"
+no_ground_point_topic: "/vstr/non_ground"
+ground_point_topic: "/vstr/ground"
+sensor_height: 1.44
+th_dist: 0.3
+</rosparam>
+</node>
+
+</launch>

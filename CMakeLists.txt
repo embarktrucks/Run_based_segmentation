@@ -30,7 +30,8 @@ SET(CMAKE_CXX_FLAGS "-std=c++11 -O2 -g -Wall ${CMAKE_CXX_FLAGS}")
 link_directories(${PCL_LIBRARY_DIRS})
 
 #Ground Plane Fitter
-find_package(PCL 1.8 REQUIRED)
+#find_package(PCL 1.8 REQUIRED) # really need 1.8 ??
+find_package(PCL REQUIRED)
 add_definitions(${PCL_DEFINITIONS})
 
 add_executable(groundplanfit 
