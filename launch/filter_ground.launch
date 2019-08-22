@@ -4,6 +4,7 @@
 point_topic: "/vstl/velodyne_points"
 no_ground_point_topic: "/vstl/non_ground"
 ground_point_topic: "/vstl/ground"
+all_points_topic: "/vstl/all_points"
 sensor_height: 1.44
 th_dist: 0.3
 </rosparam>
@@ -17,6 +18,7 @@ th_dist: 0.3
 point_topic: "/vstr/velodyne_points"
 no_ground_point_topic: "/vstr/non_ground"
 ground_point_topic: "/vstr/ground"
+all_points_topic: "/vstr/all_points"
 sensor_height: 1.44
 th_dist: 0.3
 </rosparam>
