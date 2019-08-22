@@ -10,8 +10,8 @@ th_merge: 1.0-->
 point_topic: "/vstl/all_points"
 point_frame: "velodyne_tl"
 sensor_model: 32
-th_run: 0.15
-th_merge: 0.5
+th_run: 2.0
+th_merge: 5.0
 </rosparam>
 </node>
 

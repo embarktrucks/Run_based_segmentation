@@ -16,6 +16,8 @@
 // For disable PCL complile lib, to use PointXYZIR, and customized pointcloud
 #define PCL_NO_PRECOMPILE
 
+#include <pcl/common/centroid.h>
+#include <pcl/common/common.h>
 #include <pcl/filters/filter.h>
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
@@ -23,8 +25,6 @@
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <velodyne_pointcloud/point_types.h>
-#include <pcl/common/centroid.h>
-#include <pcl/common/common.h>
 
 
 using namespace std;
@@ -53,6 +53,8 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(scan_line_run::PointXYZIRL,
                                                                    ring)(uint16_t, label, label))
 
 #define dist(a, b) sqrt(((a).x - (b).x) * ((a).x - (b).x) + ((a).y - (b).y) * ((a).y - (b).y))
+
+const int ANGLE_BUCKETS = 2251;
 
 /*
     @brief Scan Line Run ROS Node.
@@ -88,7 +90,8 @@ class ScanLineRun
 
   std::vector<std::forward_list<SLRPointXYZIRL*> > runs_; // For holding all runs.
   uint16_t max_label_;                    // max run labels, for disinguish different runs.
-  std::vector<std::vector<int> > ng_idx_; // non ground point index.
+  std::vector<std::vector<int> > ng_idx_; // non ground point index ('row' in that
+                                          // sensor_frame[scan_line)
 
   // Call back funtion.
   void velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg);
@@ -105,7 +108,6 @@ class ScanLineRun
 
   // Dummy object to occupy idx 0.
   std::forward_list<SLRPointXYZIRL*> dummy_;
-
 };
 
 /*
@@ -134,7 +136,7 @@ ScanLineRun::ScanLineRun() : node_handle_("~")
   // Init LiDAR frames with vectors and points
   SLRPointXYZIRL p_dummy;
   p_dummy.intensity = -1; // Means unoccupy by any points
-  laser_row_ = std::vector<SLRPointXYZIRL>(2251, p_dummy);
+  laser_row_ = std::vector<SLRPointXYZIRL>(ANGLE_BUCKETS, p_dummy);
   laser_frame_ = std::vector<std::vector<SLRPointXYZIRL> >(32, laser_row_);
 
   // Init runs, idx 0 for interest point, and idx for ground points
@@ -176,43 +178,46 @@ void ScanLineRun::find_runs_(int scan_line)
     return;
   }
 
-  int non_g_pt_idx = ng_idx_[scan_line][0];                // The first non ground point
-  int non_g_pt_idx_l = ng_idx_[scan_line][point_size - 1]; // The last non ground point
+  size_t runs_before = runs_.size();
+
+  int non_g_pt_row = ng_idx_[scan_line][0];                // The first non ground point
+  int non_g_pt_row_l = ng_idx_[scan_line][point_size - 1]; // The last non ground point
 
   /* Iterate all non-ground points, and compute and compare the distance
   of each two continous points. At least two non-ground points are needed.
   */
   for (int i_idx = 0; i_idx < point_size - 1; i_idx++) {
-    int i = ng_idx_[scan_line][i_idx];
-    int i1 = ng_idx_[scan_line][i_idx + 1];
+    int row_cur = ng_idx_[scan_line][i_idx];
+    int row_nxt = ng_idx_[scan_line][i_idx + 1];
 
     if (i_idx == 0) {
       // The first point, make a new run.
-      auto& p_0 = laser_frame_[scan_line][i];
+      auto& p_0 = laser_frame_[scan_line][row_cur];
       max_label_ += 1;
       runs_.push_back(dummy_);
-      laser_frame_[scan_line][i].label = max_label_;
-      runs_[p_0.label].insert_after(runs_[p_0.label].cbefore_begin(), &laser_frame_[scan_line][i]);
+      laser_frame_[scan_line][row_cur].label = max_label_;
+      runs_[p_0.label].insert_after(runs_[p_0.label].cbefore_begin(),
+                                    &laser_frame_[scan_line][row_cur]);
 
-      if (p_0.label == 0)
+      if (p_0.label == 0) {
         ROS_ERROR("p_0.label == 0");
+      }
     }
 
-    // Compare with the next point
-    auto& p_i = laser_frame_[scan_line][i];
-    auto& p_i1 = laser_frame_[scan_line][i1];
+    // Compare with the next (non-ground) point
+    auto& p_i = laser_frame_[scan_line][row_cur];
+    auto& p_i1 = laser_frame_[scan_line][row_nxt];
 
     // If next point is ground point, skip.
     if (p_i1.label == 1u) {
       // Add to ground run `runs_[1]`
       runs_[p_i1.label].insert_after(runs_[p_i1.label].cbefore_begin(),
-                                     &laser_frame_[scan_line][i1]);
+                                     &laser_frame_[scan_line][row_nxt]);
       continue;
     }
 
-    /* If cur point is not ground and next point is within threshold,
-    then make it the same run.
-       Else, to make a new run.
+    /* If curr point is not ground and next point is within threshold, then add it to the same run.
+       Else, make a new run.
     */
     if (p_i.label != 1u && dist(p_i, p_i1) < th_run_) {
       p_i1.label = p_i.label;
@@ -223,16 +228,18 @@ void ScanLineRun::find_runs_(int scan_line)
     }
 
     // Insert the index.
-    runs_[p_i1.label].insert_after(runs_[p_i1.label].cbefore_begin(), &laser_frame_[scan_line][i1]);
+    runs_[p_i1.label].insert_after(runs_[p_i1.label].cbefore_begin(),
+                                   &laser_frame_[scan_line][row_nxt]);
 
-    if (p_i1.label == 0)
+    if (p_i1.label == 0) {
       ROS_ERROR("p_i1.label == 0");
+    }
   }
 
   // Compare the last point and the first point, for laser scans is a ring.
   if (point_size > 1) {
-    auto& p_0 = laser_frame_[scan_line][non_g_pt_idx];
-    auto& p_l = laser_frame_[scan_line][non_g_pt_idx_l];
+    auto& p_0 = laser_frame_[scan_line][non_g_pt_row];
+    auto& p_l = laser_frame_[scan_line][non_g_pt_row_l];
 
     // Skip, if one of the start point or the last point is ground point.
     if (p_0.label == 1u || p_l.label == 1u) {
@@ -246,13 +253,15 @@ void ScanLineRun::find_runs_(int scan_line)
     }
   } else if (point_size == 1) {
     // The only point, make a new run.
-    auto& p_0 = laser_frame_[scan_line][non_g_pt_idx];
+    auto& p_0 = laser_frame_[scan_line][non_g_pt_row];
     max_label_ += 1;
     runs_.push_back(dummy_);
-    laser_frame_[scan_line][non_g_pt_idx].label = max_label_;
+    laser_frame_[scan_line][non_g_pt_row].label = max_label_;
     runs_[p_0.label].insert_after(runs_[p_0.label].cbefore_begin(),
-                                  &laser_frame_[scan_line][non_g_pt_idx]);
+                                  &laser_frame_[scan_line][non_g_pt_row]);
   }
+
+  ROS_INFO("For scan_line %d found: %lu runs", scan_line, runs_.size() - runs_before);
 }
 
 
@@ -406,7 +415,7 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
   // Init laser frame.
   SLRPointXYZIRL p_dummy;
   p_dummy.intensity = -1;
-  laser_row_ = std::vector<SLRPointXYZIRL>(2251, p_dummy);
+  laser_row_ = std::vector<SLRPointXYZIRL>(ANGLE_BUCKETS, p_dummy);
   laser_frame_ = std::vector<std::vector<SLRPointXYZIRL> >(32, laser_row_);
 
   // Init non-ground index holder.
@@ -418,21 +427,36 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
   double range = 0;
   int row = 0;
 
-  int min_row = 2251;
+  int min_row = ANGLE_BUCKETS;
   int max_row = 0;
+  int num_collisions = 0;
+  int num_non_ground_collisions = 0;
+  std::set<int> unique_rows;
 
-  std::set<int> rows;
+  // For my peice of mind..
+  for (int scan_line = 0; scan_line < 32; ++scan_line) {
+    for (int row = 0; row < ANGLE_BUCKETS; ++row) {
+      assert(laser_frame_[scan_line][row].intensity == -1);
+    }
+  }
 
   // Fill in 2d grid of points (laser_frame_)
   // Fill in non-ground point indices (ng_idx_)
+  ROS_INFO("PC size = %lu \"image\" size %d", laserCloudIn.points.size(), 32 * ANGLE_BUCKETS);
   for (auto& point : laserCloudIn.points) {
     if (point.ring < sensor_model_ && point.ring >= 0) {
       // Compute and angle.
       // @Note: In this case, `x` points right and `y` points forward.
       // Shouldn't matter if this doesn't align with FoR, only used to get second index
 
-      // This doesn't make sense
-      range = sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
+      // pi/2 / 0.00279111 ~ 563
+      // WITH ROUNDING:
+      // 563  - (+pi/2)/0.00279111 = 0     ->  563 - (0    )/0.00279111 = 563
+      // 563  - (0    )/0.00279111 = 563   ->  563 - (-pi/2)/0.00279111 = 1125
+      // 1688 + (-pi/2)/0.00279111 = 1125  -> 1688 + (0    )/0.00279111 = 1688
+      // 1688 + (0    )/0.00279111 = 1688  -> 1688 + (+pi/2)/0.00279111 = 2250
+      /*
+      range = sqrt(point.x * point.x + point.y * point.y); // + point.z * point.z);
       if (point.x >= 0) {
         row = int(563 - asin(point.y / range) / 0.00279111);
       } else if (point.x < 0 && point.y <= 0) {
@@ -440,27 +464,47 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
       } else {
         row = int(1688 + asin(point.y / range) / 0.00279111);
       }
+      */
+
+      // Let's use atan2 instead (Same result)
+      float angle = std::atan2(point.y, point.x); // x,y swapped with z somehow???
+      // Digitize into ANGLE_BUCKETS different angles
+      row = int(float(ANGLE_BUCKETS) * (angle + M_PI) / (2 * M_PI));
 
       min_row = std::min(min_row, row);
       max_row = std::max(max_row, row);
-      rows.insert(row);
+      unique_rows.insert(row);
 
-      if (row > 2250 || row < 0) {
+      if (row >= ANGLE_BUCKETS || row < 0) {
         ROS_ERROR("Row: %d is out of index.", row);
         return;
       } else {
-        laser_frame_[point.ring][row] = point;
+        // How the hell can we have so many collisions ~ 50%
+        if (laser_frame_[point.ring][row].intensity != -1) {
+          num_collisions++;
+          ROS_DEBUG("Collision for row: %d for ring: %d", row, point.ring);
+          // Only over-write ground points
+          if (point.label != 1u) {
+            laser_frame_[point.ring][row] = point;
+            num_non_ground_collisions++;
+          }
+        } else {
+          laser_frame_[point.ring][row] = point;
+        }
       }
 
       if (point.label != 1u) {
+        // Not ground
         ng_idx_[point.ring].push_back(row);
       } else {
+        // Ground, add to runs idx=1
         runs_[1].insert_after(runs_[1].cbefore_begin(), &point);
       }
     }
-  }
-  ROS_INFO("Min row: %d, max row: %d, num unique rows: %d", min_row, max_row,
-           static_cast<int>(rows.size()));
+  }  
+  ROS_INFO("Min row: %d, max row: %d, unique rows: %d, collisions: %d (non ground: %d)", min_row,
+           max_row, static_cast<int>(unique_rows.size()), num_collisions,
+           num_non_ground_collisions);
 
 
   // Main processing
