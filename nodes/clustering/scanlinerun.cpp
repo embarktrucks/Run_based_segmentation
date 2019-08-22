@@ -11,7 +11,6 @@
     @author Vincent Cheung(VincentCheungm)
     @bug .
 */
-//#define IO
 #include <forward_list>
 #include <iostream>
 // For disable PCL complile lib, to use PointXYZIR, and customized pointcloud
@@ -24,20 +23,9 @@
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <velodyne_pointcloud/point_types.h>
-
-
-#ifdef MARKER
-#include <visualization_msgs/Marker.h>
-#include <visualization_msgs/MarkerArray.h>
-#endif
-
 #include <pcl/common/centroid.h>
 #include <pcl/common/common.h>
 
-#ifdef IO
-#include <pcl/io/pcd_io.h>
-#include <boost/format.hpp>
-#endif
 
 using namespace std;
 
@@ -115,19 +103,9 @@ class ScanLineRun
   // Smart idx according to paper, but not useful in my case.
   int smart_idx_(int local_idx, int n_i, int n_j, bool inverse);
 
-#ifdef MARKER
-  // For display markers only, however, currently the orientation is bad.
-  ros::Publisher marker_array_pub_;
-#endif
   // Dummy object to occupy idx 0.
   std::forward_list<SLRPointXYZIRL*> dummy_;
 
-
-#ifdef INTEREST_ONLY
-  // For showing interest and index point
-  int interest_line_;
-  int interest_idx_;
-#endif
 };
 
 /*
@@ -179,23 +157,7 @@ ScanLineRun::ScanLineRun() : node_handle_("~")
   node_handle_.param<std::string>("cluster", cluster_topic, "/slr");
   ROS_INFO("Cluster Output Point Cloud: %s", cluster_topic.c_str());
   cluster_points_pub_ = node_handle_.advertise<sensor_msgs::PointCloud2>(cluster_topic, 10);
-
-#ifdef MARKER
-  // Publisher for markers.
-  ROS_INFO("Publishing jsk markers at: %s", "cluster_ma");
-  marker_array_pub_ = node_handle_.advertise<visualization_msgs::MarkerArray>("cluster_ma", 10);
-#endif
-
-
-#ifdef INTEREST_ONLY
-  // For showing interest point and its neighbour points only.
-  ROS_INFO("Showing interested points only, starts from line: %d idx: %d", interest_line_,
-           interest_idx_);
-  node_handle_.param("line", interest_line_, 16);
-  node_handle_.param("idx", interest_idx_, 500);
-#endif
 }
-
 
 /*
     @brief Read points from the given scan_line.
@@ -422,71 +384,6 @@ void ScanLineRun::merge_runs_(uint16_t cur_label, uint16_t target_label)
   }
 }
 
-#ifdef MARKER
-/*
-    @brief For making JSK-Markers with pointclouds.
-    @param cloud: The clusterred cloud to make a marker.
-    @param ns: The name string.
-    @param id: The marker id.
-    @param r,g,b: The clour of marker.
-*/
-visualization_msgs::Marker mark_cluster(pcl::PointCloud<SLRPointXYZIRL>::Ptr cloud_cluster,
-                                        std::string ns, int id, float r, float g, float b)
-{
-  Eigen::Vector4f centroid;
-  Eigen::Vector4f min;
-  Eigen::Vector4f max;
-
-  pcl::compute3DCentroid(*cloud_cluster, centroid);
-  pcl::getMinMax3D(*cloud_cluster, min, max);
-
-  uint32_t shape = visualization_msgs::Marker::CUBE;
-  visualization_msgs::Marker marker;
-  marker.header.frame_id = point_frame_;
-  marker.header.stamp = ros::Time::now();
-
-  marker.ns = ns;
-  marker.id = id;
-  marker.type = shape;
-  marker.action = visualization_msgs::Marker::ADD;
-
-  marker.pose.position.x = centroid[0];
-  marker.pose.position.y = centroid[1];
-  marker.pose.position.z = centroid[2];
-  marker.pose.orientation.x = 0.0;
-  marker.pose.orientation.y = 0.0;
-  marker.pose.orientation.z = 0.0;
-  marker.pose.orientation.w = 1.0;
-
-  marker.scale.x = (max[0] - min[0]);
-  marker.scale.y = (max[1] - min[1]);
-  marker.scale.z = (max[2] - min[2]);
-
-  if (marker.scale.x == 0)
-    marker.scale.x = 0.1;
-
-  if (marker.scale.y == 0)
-    marker.scale.y = 0.1;
-
-  if (marker.scale.z == 0)
-    marker.scale.z = 0.1;
-
-  marker.color.r = r;
-  marker.color.g = g;
-  marker.color.b = b;
-  marker.color.a = 0.5;
-
-  marker.lifetime = ros::Duration(0.5);
-  //   marker.lifetime = ros::Duration(0.5);
-  return marker;
-}
-#endif
-
-
-#ifdef IO
-int tab = 0;
-#endif
-
 /*
     @brief Velodyne pointcloud callback function, which subscribe `/all_points`
     and publish cluster points `slr`.
@@ -517,10 +414,6 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
     ng_idx_[i].clear();
   }
 
-#ifdef INTEREST_ONLY
-  interest_idx_ += 1;
-#endif
-
   // Organize Pointcloud in scanline
   double range = 0;
   int row = 0;
@@ -534,10 +427,6 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
   // Fill in non-ground point indices (ng_idx_)
   for (auto& point : laserCloudIn.points) {
     if (point.ring < sensor_model_ && point.ring >= 0) {
-#ifdef INTEREST_ONLY
-      // Set the intensity of non-interested points to zero.
-      point.intensity = 0;
-#endif
       // Compute and angle.
       // @Note: In this case, `x` points right and `y` points forward.
       // Shouldn't matter if this doesn't align with FoR, only used to get second index
@@ -581,56 +470,15 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
     update_labels_(i);
   }
 
-#ifdef INTEREST_ONLY
-  ROS_INFO("Showing interested points only line: %d idx: %d", interest_line_, interest_idx_);
-
-  for (int i = interest_line_; i >= 0; i--) {
-    if (i == interest_line_) {
-      auto& point_d = laser_frame_[i][interest_idx_];
-      // Empty dummy point
-      if (point_d.intensity == -1)
-        continue;
-      point_d.intensity = i;
-      // Add key point
-      runs_[0].insert_after(runs_[0].cbefore_begin(), &laser_frame_[i][interest_idx_]);
-    } else {
-      // Add neighbour point with smart idx
-      auto& point_d = laser_frame_[i][interest_idx_];
-      if (point_d.intensity == -1)
-        continue;
-      point_d.intensity = i;
-      // Add neighbour point
-      runs_[0].insert_after(runs_[0].cbefore_begin(), &laser_frame_[i][interest_idx_]);
-    }
-  }
-#endif
   // Extract Clusters
   // re-organize scan-line points into cluster point cloud
   pcl::PointCloud<SLRPointXYZIRL>::Ptr laserCloud(new pcl::PointCloud<SLRPointXYZIRL>());
   pcl::PointCloud<SLRPointXYZIRL>::Ptr clusters(new pcl::PointCloud<SLRPointXYZIRL>());
 
-#ifdef IO
-  // should be modified
-  std::string str_path = "./PCD";
-  if (!boost::filesystem::exists(str_path)) {
-    boost::filesystem::create_directories(str_path);
-  }
-  boost::format fmt1(str_path + "/%d_%d.%s");
-  pcl::PointCloud<SLRPointXYZIRL>::Ptr to_save(new pcl::PointCloud<SLRPointXYZIRL>());
-  pcl::PointCloud<SLRPointXYZIRL>::Ptr to_save_all(new pcl::PointCloud<SLRPointXYZIRL>());
-#endif
-
-#ifdef MARKER
-  visualization_msgs::MarkerArray ma;
-#endif
   int cnt = 0;
 
-// Re-organize pointcloud clusters for PCD saving or publish
-#ifdef INTEREST_ONLY
-  for (size_t i = 0; i < 1; i++) {
-#else
+  // Re-organize pointcloud clusters for PCD saving or publish
   for (size_t i = 2; i < runs_.size(); i++) {
-#endif
     if (!runs_[i].empty()) {
       cnt++;
 
@@ -641,24 +489,8 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
         ccnt++;
         p->label = cnt;
         laserCloud->points.push_back(*p);
-// clusters->points.push_back(*p);
-#ifdef IO
-        to_save_all->points.push_back(*p);
-        to_save->points.push_back(*p);
-#endif
+        // clusters->points.push_back(*p);
       }
-
-#ifdef IO
-      if (tab == 1) {
-        pcl::io::savePCDFileBinary((fmt1 % (tab) % (cnt) % "pcd").str(), *to_save);
-        to_save->clear();
-      }
-#endif
-
-#ifdef INTEREST_ONLY
-      // Counting interested point and its neighbour points.
-      ROS_INFO("cluster i:%d, size:%d", i, ccnt);
-#endif
       // clusters->clear();
     }
   }
@@ -670,15 +502,6 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
     cluster_msg.header.frame_id = point_frame_;
     cluster_points_pub_.publish(cluster_msg);
   }
-#ifdef IO
-  // Only save the clusterred results of the first frame.
-  if (tab == 1) {
-    to_save_all->height = to_save_all->points.size();
-    to_save_all->width = 1;
-    pcl::io::savePCDFileASCII((fmt1 % (0) % (0) % "pcd").str(), *to_save_all);
-  }
-  tab++;
-#endif
 }
 
 int main(int argc, char** argv)
