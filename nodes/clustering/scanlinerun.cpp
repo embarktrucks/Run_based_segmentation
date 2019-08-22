@@ -11,7 +11,7 @@
     @author Vincent Cheung(VincentCheungm)
     @bug .
 */
-#define IO
+//#define IO
 #include <forward_list>
 #include <iostream>
 // For disable PCL complile lib, to use PointXYZIR, and customized pointcloud
@@ -53,7 +53,7 @@ struct PointXYZIRL
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW // ensure proper alignment
 } EIGEN_ALIGN16;
 
-}; // namespace scan_line_run
+} // namespace scan_line_run
 
 #define SLRPointXYZIRL scan_line_run::PointXYZIRL
 #define VPoint velodyne_pointcloud::PointXYZIR
@@ -209,8 +209,10 @@ void ScanLineRun::find_runs_(int scan_line)
 {
   // If there is no non-ground points of current scanline, skip.
   int point_size = ng_idx_[scan_line].size();
-  if (point_size <= 0)
+  if (point_size <= 0) {
+    ROS_INFO("No non-ground points of scanline %d", scan_line);
     return;
+  }
 
   int non_g_pt_idx = ng_idx_[scan_line][0];                // The first non ground point
   int non_g_pt_idx_l = ng_idx_[scan_line][point_size - 1]; // The last non ground point
@@ -522,6 +524,14 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
   // Organize Pointcloud in scanline
   double range = 0;
   int row = 0;
+
+  int min_row = 2251;
+  int max_row = 0;
+
+  std::set<int> rows;
+
+  // Fill in 2d grid of points (laser_frame_)
+  // Fill in non-ground point indices (ng_idx_)
   for (auto& point : laserCloudIn.points) {
     if (point.ring < sensor_model_ && point.ring >= 0) {
 #ifdef INTEREST_ONLY
@@ -530,6 +540,9 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
 #endif
       // Compute and angle.
       // @Note: In this case, `x` points right and `y` points forward.
+      // Shouldn't matter if this doesn't align with FoR, only used to get second index
+
+      // This doesn't make sense
       range = sqrt(point.x * point.x + point.y * point.y + point.z * point.z);
       if (point.x >= 0) {
         row = int(563 - asin(point.y / range) / 0.00279111);
@@ -538,6 +551,10 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
       } else {
         row = int(1688 + asin(point.y / range) / 0.00279111);
       }
+
+      min_row = std::min(min_row, row);
+      max_row = std::max(max_row, row);
+      rows.insert(row);
 
       if (row > 2250 || row < 0) {
         ROS_ERROR("Row: %d is out of index.", row);
@@ -553,6 +570,8 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
       }
     }
   }
+  ROS_INFO("Min row: %d, max row: %d, num unique rows: %d", min_row, max_row,
+           static_cast<int>(rows.size()));
 
 
   // Main processing

@@ -1,7 +1,7 @@
 <launch>
 
-<!-- I think we have 32, just checking... -->
-<!--sensor_model: 16
+
+<!--
 th_run: 1.0
 th_merge: 1.0-->
 
