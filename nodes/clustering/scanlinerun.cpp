@@ -25,7 +25,7 @@
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <velodyne_pointcloud/point_types.h>
-
+#include <visualization_msgs/MarkerArray.h>
 
 using namespace std;
 
@@ -76,6 +76,7 @@ class ScanLineRun
   ros::Subscriber points_node_sub_;
   ros::Publisher cluster_points_pub_;
   ros::Publisher ring_points_pub_;
+  ros::Publisher cluster_viz_pub_;
 
   std::string point_topic_;
   std::string point_frame_;
@@ -85,13 +86,13 @@ class ScanLineRun
   double th_merge_;  // threshold of distance of runs to be merged.
 
   // For organization of points.
-  std::vector<std::vector<SLRPointXYZIRL> > laser_frame_;
+  std::vector<std::vector<SLRPointXYZIRL>> laser_frame_;
   std::vector<SLRPointXYZIRL> laser_row_;
 
-  std::vector<std::forward_list<SLRPointXYZIRL*> > runs_; // For holding all runs.
-  uint16_t max_label_;                    // max run labels, for disinguish different runs.
-  std::vector<std::vector<int> > ng_idx_; // non ground point index ('row' in that
-                                          // sensor_frame[scan_line)
+  std::vector<std::forward_list<SLRPointXYZIRL*>> runs_; // For holding all runs.
+  uint16_t max_label_;                   // max run labels, for disinguish different runs.
+  std::vector<std::vector<int>> ng_idx_; // non ground point index ('row' in that
+                                         // sensor_frame[scan_line)
 
   // Call back funtion.
   void velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg);
@@ -137,7 +138,7 @@ ScanLineRun::ScanLineRun() : node_handle_("~")
   SLRPointXYZIRL p_dummy;
   p_dummy.intensity = -1; // Means unoccupy by any points
   laser_row_ = std::vector<SLRPointXYZIRL>(ANGLE_BUCKETS, p_dummy);
-  laser_frame_ = std::vector<std::vector<SLRPointXYZIRL> >(32, laser_row_);
+  laser_frame_ = std::vector<std::vector<SLRPointXYZIRL>>(32, laser_row_);
 
   // Init runs, idx 0 for interest point, and idx for ground points
   max_label_ = 1;
@@ -159,6 +160,8 @@ ScanLineRun::ScanLineRun() : node_handle_("~")
   node_handle_.param<std::string>("cluster", cluster_topic, "/slr");
   ROS_INFO("Cluster Output Point Cloud: %s", cluster_topic.c_str());
   cluster_points_pub_ = node_handle_.advertise<sensor_msgs::PointCloud2>(cluster_topic, 10);
+
+  cluster_viz_pub_ = node_handle_.advertise<visualization_msgs::MarkerArray>("cluster_centers", 10);
 }
 
 /*
@@ -204,8 +207,11 @@ void ScanLineRun::find_runs_(int scan_line)
       }
     }
 
+    // We can have a bunch of duplicate: row_cur == row_nxt...
+
     // Compare with the next (non-ground) point
-    auto& p_i = laser_frame_[scan_line][row_cur];
+    auto& p_i =
+        laser_frame_[scan_line][row_cur]; // what happens if this is a point we have seen before??
     auto& p_i1 = laser_frame_[scan_line][row_nxt];
 
     // If next point is ground point, skip.
@@ -393,6 +399,27 @@ void ScanLineRun::merge_runs_(uint16_t cur_label, uint16_t target_label)
   }
 }
 
+visualization_msgs::Marker clusterCenterMarker(const std::string& frame_id, size_t id,
+                                               const Eigen::Vector3f& center)
+{
+  visualization_msgs::Marker marker;
+  marker.header.frame_id = frame_id;
+  marker.header.stamp = ros::Time::now();
+  marker.id = id;
+  marker.ns = "cluster_centers";
+  marker.type = visualization_msgs::Marker::SPHERE;
+  marker.pose.position.x = center(0);
+  marker.pose.position.y = center(1);
+  marker.pose.position.z = center(2);
+  marker.pose.orientation.w = 1.0;
+  marker.scale.x = 1.0;
+  marker.scale.y = 1.0;
+  marker.scale.z = 1.0;
+  marker.color.a = 1.0;
+  marker.color.g = 1.0;
+  return marker;
+}
+
 /*
     @brief Velodyne pointcloud callback function, which subscribe `/all_points`
     and publish cluster points `slr`.
@@ -416,7 +443,7 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
   SLRPointXYZIRL p_dummy;
   p_dummy.intensity = -1;
   laser_row_ = std::vector<SLRPointXYZIRL>(ANGLE_BUCKETS, p_dummy);
-  laser_frame_ = std::vector<std::vector<SLRPointXYZIRL> >(32, laser_row_);
+  laser_frame_ = std::vector<std::vector<SLRPointXYZIRL>>(32, laser_row_);
 
   // Init non-ground index holder.
   for (int i = 0; i < sensor_model_; i++) {
@@ -432,6 +459,8 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
   int num_collisions = 0;
   int num_non_ground_collisions = 0;
   std::set<int> unique_rows;
+  std::vector<std::set<int>> unique_rows_per_ring(32);
+  std::vector<int> collisions_per_ring(32, 0);
 
   // For my peice of mind..
   for (int scan_line = 0; scan_line < 32; ++scan_line) {
@@ -440,71 +469,77 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
     }
   }
 
+  ROS_INFO("PC size = %lu \"image\" size %d", laserCloudIn.points.size(), 32 * ANGLE_BUCKETS);
+
   // Fill in 2d grid of points (laser_frame_)
   // Fill in non-ground point indices (ng_idx_)
-  ROS_INFO("PC size = %lu \"image\" size %d", laserCloudIn.points.size(), 32 * ANGLE_BUCKETS);
   for (auto& point : laserCloudIn.points) {
     if (point.ring < sensor_model_ && point.ring >= 0) {
-      // Compute and angle.
-      // @Note: In this case, `x` points right and `y` points forward.
-      // Shouldn't matter if this doesn't align with FoR, only used to get second index
-
-      // pi/2 / 0.00279111 ~ 563
-      // WITH ROUNDING:
-      // 563  - (+pi/2)/0.00279111 = 0     ->  563 - (0    )/0.00279111 = 563
-      // 563  - (0    )/0.00279111 = 563   ->  563 - (-pi/2)/0.00279111 = 1125
-      // 1688 + (-pi/2)/0.00279111 = 1125  -> 1688 + (0    )/0.00279111 = 1688
-      // 1688 + (0    )/0.00279111 = 1688  -> 1688 + (+pi/2)/0.00279111 = 2250
-      /*
-      range = sqrt(point.x * point.x + point.y * point.y); // + point.z * point.z);
-      if (point.x >= 0) {
-        row = int(563 - asin(point.y / range) / 0.00279111);
-      } else if (point.x < 0 && point.y <= 0) {
-        row = int(1688 + asin(point.y / range) / 0.00279111);
-      } else {
-        row = int(1688 + asin(point.y / range) / 0.00279111);
-      }
-      */
-
-      // Let's use atan2 instead (Same result)
-      float angle = std::atan2(point.y, point.x); // x,y swapped with z somehow???
       // Digitize into ANGLE_BUCKETS different angles
+      float angle = std::atan2(point.y, point.x);
       row = int(float(ANGLE_BUCKETS) * (angle + M_PI) / (2 * M_PI));
 
       min_row = std::min(min_row, row);
       max_row = std::max(max_row, row);
       unique_rows.insert(row);
 
+      unique_rows_per_ring[point.ring].insert(row);
+
+      bool duplicate = false;
+
       if (row >= ANGLE_BUCKETS || row < 0) {
         ROS_ERROR("Row: %d is out of index.", row);
         return;
       } else {
-        // How the hell can we have so many collisions ~ 50%
+        // How the hell can we have so many collisions ~ 50% -- best guess is dual return mode.
         if (laser_frame_[point.ring][row].intensity != -1) {
+          collisions_per_ring[point.ring]++;
           num_collisions++;
-          ROS_DEBUG("Collision for row: %d for ring: %d", row, point.ring);
-          // Only over-write ground points
+
+          // Often (always?) exactly the same values...
+          //          if (point.ring == 5) {
+          //            ROS_WARN("row: %d our angle %.5f prev angle %.5f.\n"
+          //                     "our  pnt: (%.4f, %.4f, %.4f)\n"
+          //                     "prev pnt: (%.4f, %.4f, %.4f)",
+          //                     row, angle,
+          //                     std::atan2(laser_frame_[point.ring][row].y,
+          //                     laser_frame_[point.ring][row].x),
+          //                     point.x, point.y, point.z, laser_frame_[point.ring][row].x,
+          //                     laser_frame_[point.ring][row].y, laser_frame_[point.ring][row].z);
+          //          }
+
+          duplicate = true;
+
+          // Don't over-write...
           if (point.label != 1u) {
-            laser_frame_[point.ring][row] = point;
+            // laser_frame_[point.ring][row] = point;
             num_non_ground_collisions++;
           }
+
         } else {
           laser_frame_[point.ring][row] = point;
         }
       }
 
-      if (point.label != 1u) {
-        // Not ground
-        ng_idx_[point.ring].push_back(row);
-      } else {
-        // Ground, add to runs idx=1
-        runs_[1].insert_after(runs_[1].cbefore_begin(), &point);
+      if (!duplicate) {
+        if (point.label != 1u) {
+          // Not ground
+          ng_idx_[point.ring].push_back(row);
+        } else {
+          // Ground, add to runs idx=1
+          runs_[1].insert_after(runs_[1].cbefore_begin(), &point);
+        }
       }
     }
-  }  
+  } // end for points
+
   ROS_INFO("Min row: %d, max row: %d, unique rows: %d, collisions: %d (non ground: %d)", min_row,
            max_row, static_cast<int>(unique_rows.size()), num_collisions,
            num_non_ground_collisions);
+  //  for (int i = 0; i < 32; ++i) {
+  //    ROS_INFO("Ring: %d, unique rows: %lu, collisions: %d", i, unique_rows_per_ring[i].size(),
+  //             collisions_per_ring[i]);
+  //  }
 
 
   // Main processing
@@ -521,12 +556,17 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
 
   int cnt = 0;
 
+  std::vector<Eigen::Vector3f> cluster_centers;
+
   // Re-organize pointcloud clusters for PCD saving or publish
   for (size_t i = 2; i < runs_.size(); i++) {
     if (!runs_[i].empty()) {
       cnt++;
 
       int ccnt = 0;
+
+      Eigen::Vector3f cluster_mean(0., 0., 0.);
+
       // adding run current for publishing
       for (auto& p : runs_[i]) {
         // Reorder the label id
@@ -534,6 +574,14 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
         p->label = cnt;
         laserCloud->points.push_back(*p);
         // clusters->points.push_back(*p);
+
+        cluster_mean(0) += p->x;
+        cluster_mean(1) += p->y;
+        cluster_mean(2) += p->z;
+      }
+      cluster_mean *= 1.0 / ccnt;
+      if (ccnt > 5) {
+        cluster_centers.push_back(cluster_mean);
       }
       // clusters->clear();
     }
@@ -544,8 +592,22 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
     sensor_msgs::PointCloud2 cluster_msg;
     pcl::toROSMsg(*laserCloud, cluster_msg);
     cluster_msg.header.frame_id = point_frame_;
+
     cluster_points_pub_.publish(cluster_msg);
   }
+
+  visualization_msgs::MarkerArray markers;
+  // clear previous data
+  visualization_msgs::Marker marker;
+  marker.action = 3; // DELETEALL
+  markers.markers.push_back(marker);
+
+  // Publish Cluster Centers
+  for (size_t i = 0; i < cluster_centers.size(); ++i) {
+    const Eigen::Vector3f& center = cluster_centers[i];
+    markers.markers.push_back(clusterCenterMarker(point_frame_, i, center));
+  }
+  cluster_viz_pub_.publish(markers);
 }
 
 int main(int argc, char** argv)

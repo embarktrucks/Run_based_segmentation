@@ -247,6 +247,9 @@ void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& 
   pcl::fromROSMsg(*in_cloud_msg, laserCloudIn);
   pcl::PointCloud<VPoint> laserCloudIn_org;
   pcl::fromROSMsg(*in_cloud_msg, laserCloudIn_org);
+
+  ROS_INFO("Input pc size = %lu", laserCloudIn.size());
+
   // For mark ground points and hold all points
   SLRPointXYZIRL point;
   for (size_t i = 0; i < laserCloudIn.points.size(); i++) {
