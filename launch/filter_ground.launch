@@ -1,7 +1,8 @@
 <launch>
 <node pkg="points_preprocessor_usi" type="groundplanfit" name="filter_left_velodyne" output="screen">
 <rosparam>
-point_topic: "/vstl/velodyne_points"
+<!--point_topic: "/vstl/velodyne_points"-->
+point_topic: /velodyne_points
 no_ground_point_topic: "/vstl/non_ground"
 ground_point_topic: "/vstl/ground"
 all_points_topic: "/vstl/all_points"

@@ -458,9 +458,13 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
   int max_row = 0;
   int num_collisions = 0;
   int num_non_ground_collisions = 0;
+  int num_exact_duplicate = 0;
   std::set<int> unique_rows;
   std::vector<std::set<int>> unique_rows_per_ring(32);
   std::vector<int> collisions_per_ring(32, 0);
+  float min_duplicate_dist = 1000.0;
+  float max_duplicate_dist = 0.0;
+  int n_prints = 0;
 
   // For my peice of mind..
   for (int scan_line = 0; scan_line < 32; ++scan_line) {
@@ -468,7 +472,6 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
       assert(laser_frame_[scan_line][row].intensity == -1);
     }
   }
-
   ROS_INFO("PC size = %lu \"image\" size %d", laserCloudIn.points.size(), 32 * ANGLE_BUCKETS);
 
   // Fill in 2d grid of points (laser_frame_)
@@ -495,20 +498,29 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
         if (laser_frame_[point.ring][row].intensity != -1) {
           collisions_per_ring[point.ring]++;
           num_collisions++;
-
-          // Often (always?) exactly the same values...
-          //          if (point.ring == 5) {
-          //            ROS_WARN("row: %d our angle %.5f prev angle %.5f.\n"
-          //                     "our  pnt: (%.4f, %.4f, %.4f)\n"
-          //                     "prev pnt: (%.4f, %.4f, %.4f)",
-          //                     row, angle,
-          //                     std::atan2(laser_frame_[point.ring][row].y,
-          //                     laser_frame_[point.ring][row].x),
-          //                     point.x, point.y, point.z, laser_frame_[point.ring][row].x,
-          //                     laser_frame_[point.ring][row].y, laser_frame_[point.ring][row].z);
-          //          }
-
           duplicate = true;
+
+          assert(laser_frame_[point.ring][row].ring == point.ring);
+
+          float duplicate_dist = dist(point, laser_frame_[point.ring][row]);
+
+          if (duplicate_dist < 0.00001f) {
+            num_exact_duplicate++;
+          }
+
+          // Often exactly the same values...
+          if (++n_prints < 10 || duplicate_dist > 1.0) {
+            ROS_WARN("ring %d, row: %d our angle %.5f prev angle %.5f dist = %.3f \n"
+                     "our  pnt: (%.5f, %.5f, %.5f)\n"
+                     "prev pnt: (%.5f, %.5f, %.5f)",
+                     point.ring, row, angle,
+                     std::atan2(laser_frame_[point.ring][row].y, laser_frame_[point.ring][row].x),
+                     duplicate_dist, point.x, point.y, point.z, laser_frame_[point.ring][row].x,
+                     laser_frame_[point.ring][row].y, laser_frame_[point.ring][row].z);
+          }
+
+          min_duplicate_dist = std::min(min_duplicate_dist, duplicate_dist);
+          max_duplicate_dist = std::max(max_duplicate_dist, duplicate_dist);
 
           // Don't over-write...
           if (point.label != 1u) {
@@ -533,9 +545,11 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
     }
   } // end for points
 
-  ROS_INFO("Min row: %d, max row: %d, unique rows: %d, collisions: %d (non ground: %d)", min_row,
-           max_row, static_cast<int>(unique_rows.size()), num_collisions,
-           num_non_ground_collisions);
+  ROS_INFO("Min row: %d, max row: %d, unique rows: %d, collisions: %d (non ground: %d), exact "
+           "duplicate: %d\n"
+           "min_dup. dist = %.8f max_dup. dist = %.8f",
+           min_row, max_row, static_cast<int>(unique_rows.size()), num_collisions,
+           num_non_ground_collisions, num_exact_duplicate, min_duplicate_dist, max_duplicate_dist);
   //  for (int i = 0; i < 32; ++i) {
   //    ROS_INFO("Ring: %d, unique rows: %lu, collisions: %d", i, unique_rows_per_ring[i].size(),
   //             collisions_per_ring[i]);
