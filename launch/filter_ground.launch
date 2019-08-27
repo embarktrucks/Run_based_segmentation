@@ -9,7 +9,7 @@ all_points_topic: "/vstl/all_points"
 sensor_height: 1.44
 th_dist: 0.3
 num_iter: 3
-num_lpr: 500
+num_lpr: 5000
 </rosparam>
 </node>
 

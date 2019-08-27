@@ -68,9 +68,14 @@ pcl::PointCloud<SLRPointXYZIRL>::Ptr g_all_pc(new pcl::PointCloud<SLRPointXYZIRL
     @brief Compare function to sort points. Here use z axis.
     @return z-axis accent
 */
-bool point_cmp(VPoint a, VPoint b)
+bool point_cmp_z(const VPoint& a, const VPoint& b)
 {
   return a.z < b.z;
+}
+
+bool point_cmp_x(const VPoint& a, const VPoint& b)
+{
+  return a.x < b.x;
 }
 
 /*
@@ -113,7 +118,9 @@ class GroundPlaneFit
 
   void velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg);
   void estimate_plane_(void);
-  void extract_initial_seeds_(const pcl::PointCloud<VPoint>& p_sorted);
+
+  typedef typename std::vector<VPoint, Eigen::aligned_allocator<VPoint>>::const_iterator points_cit;
+  void extract_initial_seeds_(points_cit begin_sorted, points_cit end_sorted);
 
   // Model parameter for ground plane fitting
   // The ground plane model is: ax+by+cz+d=0
@@ -175,6 +182,47 @@ GroundPlaneFit::GroundPlaneFit() : node_handle_("~")
 }
 
 /*
+    @brief Extract initial seeds of the given pointcloud sorted segment.
+    This function filter ground seeds points accoring to heigt.
+    This function will set the `g_ground_pc` to `g_seed_pc`.
+    @param p_sorted: sorted pointcloud
+
+    @param ::num_lpr_: num of LPR points
+    @param ::th_seeds_: threshold distance of seeds
+    @param ::
+
+*/
+void GroundPlaneFit::extract_initial_seeds_(points_cit begin_sorted, points_cit end_sorted)
+{
+  // LPR is the mean of low point representative
+  double sum = 0;
+  int cnt = 0;
+
+  int half = std::min(static_cast<int>(end_sorted - begin_sorted), num_lpr_) / 2;
+  double median_lpr_height = 0.0;
+
+  // Calculate the mean height value.
+  for (auto it = begin_sorted; it != end_sorted && cnt < num_lpr_; ++it) {
+    sum += it->z;
+    cnt++;
+    if (static_cast<int>(it - begin_sorted) == half) {
+      median_lpr_height = it->z;
+    }
+  }
+
+  double lpr_height = cnt != 0 ? sum / cnt : 0; // in case divide by 0
+  ROS_INFO("lpr_z = %.3f (median = %.3f)", lpr_height, median_lpr_height);
+  g_seeds_pc->clear();
+  // iterate pointcloud, filter those height is less than lpr.height+th_seeds_
+  for (auto it = begin_sorted; it != end_sorted; ++it) {
+    if (it->z < median_lpr_height + th_seeds_) { // instead of lpr_height
+      g_seeds_pc->points.push_back(*it);
+    }
+  }
+  // return seeds points
+}
+
+/*
     @brief The function to estimate plane model. The
     model parameter `normal_` and `d_`, and `th_dist_d_`
     is set here.
@@ -210,42 +258,6 @@ void GroundPlaneFit::estimate_plane_(void)
   // return the equation parameters
 }
 
-
-/*
-    @brief Extract initial seeds of the given pointcloud sorted segment.
-    This function filter ground seeds points accoring to heigt.
-    This function will set the `g_ground_pc` to `g_seed_pc`.
-    @param p_sorted: sorted pointcloud
-
-    @param ::num_lpr_: num of LPR points
-    @param ::th_seeds_: threshold distance of seeds
-    @param ::
-
-*/
-void GroundPlaneFit::extract_initial_seeds_(const pcl::PointCloud<VPoint>& p_sorted)
-{
-  // LPR is the mean of low point representative
-  double sum = 0;
-  int cnt = 0;
-  // Calculate the mean height value.
-  for (int i = 0; i < p_sorted.points.size() && cnt < num_lpr_; i++) {
-    sum += p_sorted.points[i].z;
-    cnt++;
-  }
-  // median
-  int half = std::min(static_cast<int>(p_sorted.size()), num_lpr_) / 2;
-  double median_lpr_height = p_sorted[half].z;
-  double lpr_height = cnt != 0 ? sum / cnt : 0; // in case divide by 0
-  ROS_INFO("lpr_z = %.3f (median = %.3f)", lpr_height, median_lpr_height);
-  g_seeds_pc->clear();
-  // iterate pointcloud, filter those height is less than lpr.height+th_seeds_
-  for (int i = 0; i < p_sorted.points.size(); i++) {
-    if (p_sorted.points[i].z < lpr_height + th_seeds_) {
-      g_seeds_pc->points.push_back(p_sorted.points[i]);
-    }
-  }
-  // return seeds points
-}
 
 /*
     @brief Velodyne pointcloud callback function. The main GPF pipeline is here.
@@ -298,30 +310,20 @@ void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& 
     g_all_pc->points.push_back(point);
   }
 
+  // sort on x, then split into num_seg_
+  sort(laserCloudIn.points.begin(), laserCloudIn.points.end(), point_cmp_x);
+
   for (int i = 0; i < num_seg_; ++i) {
     // std::vector<int> indices;
     // pcl::removeNaNFromPointCloud(laserCloudIn, laserCloudIn,indices);
     // 2.Sort on Z-axis value.
-    sort(laserCloudIn.points.begin(), laserCloudIn.points.end(), point_cmp);
-    // 3.Error point removal
-    // As there are some error mirror reflection under the ground,
-    // here regardless point under 2* sensor_height
-    // Sort point according to height, here uses z-axis in default
+    sort(laserCloudIn.points.begin(), laserCloudIn.points.end(), point_cmp_z);
 
-    // Very sensitive to this
-    pcl::PointCloud<VPoint>::iterator it = laserCloudIn.points.begin();
-    for (int i = 0; i < laserCloudIn.points.size(); i++) {
-      if (laserCloudIn.points[i].z < -1.5 * sensor_height_) {
-        it++;
-      } else {
-        break;
-      }
-    }
-    laserCloudIn.points.erase(laserCloudIn.points.begin(), it);
+    // 3.Error point removal -- let's use the median instead...
 
 
     // 4. Extract init ground seeds.
-    extract_initial_seeds_(laserCloudIn);
+    extract_initial_seeds_(laserCloudIn.points.cbegin(), laserCloudIn.points.cend());
     g_ground_pc = g_seeds_pc;
 
     // 5. Ground plane fitter mainloop
