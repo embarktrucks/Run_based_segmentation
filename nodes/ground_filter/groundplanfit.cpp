@@ -94,7 +94,7 @@ class GroundPlaneFit
   GroundPlaneFit();
 
   geometry_msgs::TransformStamped
-  planeTransform(const sensor_msgs::PointCloud2ConstPtr& in_cloud_msg);
+  planeTransform(const sensor_msgs::PointCloud2ConstPtr& in_cloud_msg, int num);
 
  private:
   ros::NodeHandle node_handle_;
@@ -128,6 +128,8 @@ class GroundPlaneFit
   float d_;
   MatrixXf normal_;
   float th_dist_d_;
+
+  Eigen::Vector3f seeds_mean_;
 };
 
 /*
@@ -245,10 +247,10 @@ void GroundPlaneFit::estimate_plane_(void)
   // use the least singular vector as normal
   normal_ = (svd.matrixU().col(2));
   // mean ground seeds value
-  Eigen::Vector3f seeds_mean = pc_mean.head<3>();
+  seeds_mean_ = pc_mean.head<3>();
 
   // according to normal.T*[x,y,z] = -d
-  d_ = -(normal_.transpose() * seeds_mean)(0, 0);
+  d_ = -(normal_.transpose() * seeds_mean_)(0, 0);
   // set distance threhold to `th_dist - d`
   th_dist_d_ = th_dist_ - d_;
 
@@ -257,30 +259,27 @@ void GroundPlaneFit::estimate_plane_(void)
   // return the equation parameters
 }
 
-
-/*
-    @brief Velodyne pointcloud callback function. The main GPF pipeline is here.
-    PointCloud SensorMsg -> Pointcloud -> z-value sorted Pointcloud
-    ->error points removal -> extract ground seeds -> ground plane fit mainloop
-*/
 geometry_msgs::TransformStamped
-GroundPlaneFit::planeTransform(const sensor_msgs::PointCloud2ConstPtr& in_cloud_msg)
+GroundPlaneFit::planeTransform(const sensor_msgs::PointCloud2ConstPtr& in_cloud_msg, int num)
 {
   geometry_msgs::TransformStamped transformStamped;
   transformStamped.header.stamp = in_cloud_msg->header.stamp;
   transformStamped.header.frame_id = in_cloud_msg->header.frame_id;
-  transformStamped.child_frame_id = in_cloud_msg->header.frame_id + "_ground_plane";
-  transformStamped.transform.translation.x = 0.;
-  transformStamped.transform.translation.y = 0.;
-  transformStamped.transform.translation.z = -d_;
+  std::stringstream ss;
+  ss << in_cloud_msg->header.frame_id << "_ground_plane_" << num;
+  transformStamped.child_frame_id = ss.str();
+  transformStamped.transform.translation.x = seeds_mean_(0);
+  transformStamped.transform.translation.y = seeds_mean_(1);
+  transformStamped.transform.translation.z = seeds_mean_(2);
 
-  double roll = std::atan2(1. - normal_(2), normal_(1));
-  double pitch = std::atan2(1. - normal_(2), normal_(0));
-  double yaw = std::atan2(normal_(1), normal_(0));
+  // https://www.mathworks.com/matlabcentral/answers/298940-how-to-calculate-roll-pitch-and-yaw-from-xyz-coordinates-of-3-planar-points
+  double roll = std::atan2(-normal_(1), normal_(2));
+  double pitch = std::asin(normal_(0));
+  double yaw = 0.0;
   ROS_INFO("normal = %.5f, %.5f, %.5f\nRPY = %.2f, %.2f, %.2f", normal_(0), normal_(1), normal_(2),
            roll, pitch, yaw);
   tf2::Quaternion q;
-  q.setRPY(roll, pitch, yaw);
+  q.setRPY(roll, pitch, 0.0);
   transformStamped.transform.rotation.x = q.x();
   transformStamped.transform.rotation.y = q.y();
   transformStamped.transform.rotation.z = q.z();
@@ -289,6 +288,11 @@ GroundPlaneFit::planeTransform(const sensor_msgs::PointCloud2ConstPtr& in_cloud_
   return transformStamped;
 }
 
+/*
+    @brief Velodyne pointcloud callback function. The main GPF pipeline is here.
+    PointCloud SensorMsg -> Pointcloud -> z-value sorted Pointcloud
+    ->error points removal -> extract ground seeds -> ground plane fit mainloop
+*/
 void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_cloud_msg)
 {
   // 1.Msg to pointcloud
@@ -309,59 +313,76 @@ void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& 
     g_all_pc->points.push_back(point);
   }
 
-  // sort on x, then split into num_seg_
+  // Different ground levels...
+  // sort on z, then split into num_seg_
   sort(laserCloudIn.points.begin(), laserCloudIn.points.end(), point_cmp_x);
 
-  for (int i = 0; i < num_seg_; ++i) {
+  assert(laserCloudIn.points.size() == laserCloudIn_org.points.size());
+  ROS_INFO("Processing %lu points", laserCloudIn.points.size());
+
+  size_t sz = laserCloudIn.points.size() / num_seg_;
+  for (int seg = 0; seg < num_seg_; ++seg) {
+    size_t start = seg * sz;
+
+    if (seg == num_seg_ - 1 && seg > 0) {
+      sz = laserCloudIn.points.size() - (num_seg_ - 1) * sz;
+    }
+
+    ROS_INFO("Seg %d, num pnts %lu", seg, sz);
+
     // 2. Sort on Z-axis value.
-    sort(laserCloudIn.points.begin(), laserCloudIn.points.end(), point_cmp_z);
+    sort(laserCloudIn.points.begin() + start, laserCloudIn.points.begin() + start + sz,
+         point_cmp_z);
 
     // 3. Error point removal -- let's use the median LPR instead
 
     // 4. Extract init ground seeds.
-    extract_initial_seeds_(laserCloudIn.points.cbegin(), laserCloudIn.points.cend());
+    extract_initial_seeds_(laserCloudIn.points.cbegin() + start,
+                           laserCloudIn.points.cbegin() + start + sz);
     g_ground_pc = g_seeds_pc;
 
     // 5. Ground plane fitter mainloop
-    for (int i = 0; i < num_iter_; i++) {
+    for (int it = 0; it < num_iter_; it++) {
       estimate_plane_();
       g_ground_pc->clear();
       g_not_ground_pc->clear();
 
       // pointcloud to matrix
-      MatrixXf points(laserCloudIn_org.points.size(), 3);
+      MatrixXf points(sz, 3);
       int j = 0;
-      for (auto p : laserCloudIn_org.points) {
-        points.row(j++) << p.x, p.y, p.z;
+      for (auto it = laserCloudIn_org.points.cbegin() + start;
+           it != laserCloudIn_org.points.cbegin() + start + sz; ++it) {
+        points.row(j++) << it->x, it->y, it->z;
       }
       // ground plane model
       VectorXf result = points * normal_;
       // threshold filter
       for (int r = 0; r < result.rows(); r++) {
         if (result[r] < th_dist_d_) {
-          g_all_pc->points[r].label = 1u; // means ground
-          g_ground_pc->points.push_back(laserCloudIn_org[r]); // used to fit plane again
+          g_all_pc->points[start + r].label = 1u;                     // means ground
+          g_ground_pc->points.push_back(laserCloudIn_org[start + r]); // used to fit plane again
         } else {
-          g_all_pc->points[r].label = 0u; // means not ground and non clusterred
+          g_all_pc->points[start + r].label = 0u; // means not ground and non clusterred
         }
       }
     }
+
+    // Publish transform to plane (for visualization)
+    tf_br_.sendTransform(planeTransform(in_cloud_msg, seg));
+
   } // end for num_seg_
 
   g_ground_pc->clear();
   g_not_ground_pc->clear();
 
-  for(size_t i=0; i<laserCloudIn_org.points.size(); ++i){
-    if(g_all_pc->points[i].label == 1u) {
-      //ground
+  for (size_t i = 0; i < laserCloudIn_org.points.size(); ++i) {
+    if (g_all_pc->points[i].label == 1u) {
+      // ground
       g_ground_pc->points.push_back(laserCloudIn_org[i]);
     } else {
       g_not_ground_pc->points.push_back(laserCloudIn_org[i]);
     }
   }
-
-  // Publish transform to plane (for visualization)
-  tf_br_.sendTransform(planeTransform(in_cloud_msg));
 
   // publish ground points
   sensor_msgs::PointCloud2 ground_msg;
