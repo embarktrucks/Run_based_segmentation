@@ -63,7 +63,6 @@ pcl::PointCloud<VPoint>::Ptr g_ground_pc(new pcl::PointCloud<VPoint>());
 pcl::PointCloud<VPoint>::Ptr g_not_ground_pc(new pcl::PointCloud<VPoint>());
 pcl::PointCloud<SLRPointXYZIRL>::Ptr g_all_pc(new pcl::PointCloud<SLRPointXYZIRL>());
 
-
 /*
     @brief Compare function to sort points. Here use z axis.
     @return z-axis accent
@@ -314,13 +313,10 @@ void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& 
   sort(laserCloudIn.points.begin(), laserCloudIn.points.end(), point_cmp_x);
 
   for (int i = 0; i < num_seg_; ++i) {
-    // std::vector<int> indices;
-    // pcl::removeNaNFromPointCloud(laserCloudIn, laserCloudIn,indices);
-    // 2.Sort on Z-axis value.
+    // 2. Sort on Z-axis value.
     sort(laserCloudIn.points.begin(), laserCloudIn.points.end(), point_cmp_z);
 
-    // 3.Error point removal -- let's use the median instead...
-
+    // 3. Error point removal -- let's use the median LPR instead
 
     // 4. Extract init ground seeds.
     extract_initial_seeds_(laserCloudIn.points.cbegin(), laserCloudIn.points.cend());
@@ -344,37 +340,50 @@ void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& 
       for (int r = 0; r < result.rows(); r++) {
         if (result[r] < th_dist_d_) {
           g_all_pc->points[r].label = 1u; // means ground
-          g_ground_pc->points.push_back(laserCloudIn_org[r]);
+          g_ground_pc->points.push_back(laserCloudIn_org[r]); // used to fit plane again
         } else {
           g_all_pc->points[r].label = 0u; // means not ground and non clusterred
-          g_not_ground_pc->points.push_back(laserCloudIn_org[r]);
         }
       }
     }
+  } // end for num_seg_
 
-    // Publish transform to plane (for visualization)
-    tf_br_.sendTransform(planeTransform(in_cloud_msg));
+  g_ground_pc->clear();
+  g_not_ground_pc->clear();
 
-    // publish ground points
-    sensor_msgs::PointCloud2 ground_msg;
-    pcl::toROSMsg(*g_ground_pc, ground_msg);
-    ground_msg.header.stamp = in_cloud_msg->header.stamp;
-    ground_msg.header.frame_id = in_cloud_msg->header.frame_id;
-    ground_points_pub_.publish(ground_msg);
-    // publish not ground points
-    sensor_msgs::PointCloud2 groundless_msg;
-    pcl::toROSMsg(*g_not_ground_pc, groundless_msg);
-    groundless_msg.header.stamp = in_cloud_msg->header.stamp;
-    groundless_msg.header.frame_id = in_cloud_msg->header.frame_id;
-    groundless_points_pub_.publish(groundless_msg);
-    // publish all points
-    sensor_msgs::PointCloud2 all_points_msg;
-    pcl::toROSMsg(*g_all_pc, all_points_msg);
-    all_points_msg.header.stamp = in_cloud_msg->header.stamp;
-    all_points_msg.header.frame_id = in_cloud_msg->header.frame_id;
-    all_points_pub_.publish(all_points_msg);
-    g_all_pc->clear();
+  for(size_t i=0; i<laserCloudIn_org.points.size(); ++i){
+    if(g_all_pc->points[i].label == 1u) {
+      //ground
+      g_ground_pc->points.push_back(laserCloudIn_org[i]);
+    } else {
+      g_not_ground_pc->points.push_back(laserCloudIn_org[i]);
+    }
   }
+
+  // Publish transform to plane (for visualization)
+  tf_br_.sendTransform(planeTransform(in_cloud_msg));
+
+  // publish ground points
+  sensor_msgs::PointCloud2 ground_msg;
+  pcl::toROSMsg(*g_ground_pc, ground_msg);
+  ground_msg.header.stamp = in_cloud_msg->header.stamp;
+  ground_msg.header.frame_id = in_cloud_msg->header.frame_id;
+  ground_points_pub_.publish(ground_msg);
+
+  // publish not ground points
+  sensor_msgs::PointCloud2 groundless_msg;
+  pcl::toROSMsg(*g_not_ground_pc, groundless_msg);
+  groundless_msg.header.stamp = in_cloud_msg->header.stamp;
+  groundless_msg.header.frame_id = in_cloud_msg->header.frame_id;
+  groundless_points_pub_.publish(groundless_msg);
+
+  // publish all points
+  sensor_msgs::PointCloud2 all_points_msg;
+  pcl::toROSMsg(*g_all_pc, all_points_msg);
+  all_points_msg.header.stamp = in_cloud_msg->header.stamp;
+  all_points_msg.header.frame_id = in_cloud_msg->header.frame_id;
+  all_points_pub_.publish(all_points_msg);
+  g_all_pc->clear();
 }
 
 int main(int argc, char** argv)
