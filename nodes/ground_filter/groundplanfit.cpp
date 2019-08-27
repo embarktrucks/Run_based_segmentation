@@ -320,13 +320,22 @@ void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& 
   assert(laserCloudIn.points.size() == laserCloudIn_org.points.size());
   ROS_INFO("Processing %lu points", laserCloudIn.points.size());
 
-  size_t sz = laserCloudIn.points.size() / num_seg_;
-  for (int seg = 0; seg < num_seg_; ++seg) {
-    size_t start = seg * sz;
+  Eigen::VectorXf x_ranges = Eigen::VectorXf::LinSpaced(num_seg_, 10*10, 100*100);
 
-    if (seg == num_seg_ - 1 && seg > 0) {
-      sz = laserCloudIn.points.size() - (num_seg_ - 1) * sz;
+  // size_t sz = laserCloudIn.points.size() / num_seg_;
+  size_t start = 0;
+  size_t sz = 0;
+  for (int seg = 0; seg < num_seg_; ++seg) {
+    auto it =
+        std::upper_bound(laserCloudIn.points.cbegin(), laserCloudIn.points.cend(), x_ranges[seg],
+                         [](float cutoff, const VPoint& pnt) { return cutoff < pnt.x*pnt.x+pnt.y*pnt.y; });
+    if (seg == num_seg_ - 1) {
+      sz = (laserCloudIn.points.cend() - laserCloudIn.points.cbegin()) - start;
+    } else {
+      sz = (it - laserCloudIn.points.cbegin()) - start;
     }
+
+    // size_t start = seg * sz;
 
     ROS_INFO("Seg %d, num pnts %lu", seg, sz);
 
@@ -370,6 +379,7 @@ void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& 
     // Publish transform to plane (for visualization)
     tf_br_.sendTransform(planeTransform(in_cloud_msg, seg));
 
+    start += sz;
   } // end for num_seg_
 
   g_ground_pc->clear();

@@ -7,12 +7,12 @@ no_ground_point_topic: "/vstl/non_ground"
 ground_point_topic: "/vstl/ground"
 all_points_topic: "/vstl/all_points"
 sensor_height: 1.44
-th_dist: 0.15
-th_seeds: 0.5
+th_dist: 0.1
+th_seeds: 1.8
 num_iter: 3
 <!--num_lpr: 5000-->
 num_lpr: 5000
-num_seg: 3
+num_seg: 2
 </rosparam>
 </node>
 
