@@ -2,16 +2,16 @@
 
 
 <!--
-th_run: 1.0
-th_merge: 1.5-->
+th_run: 1.25
+th_merge: 2.0-->
 
 <node pkg="points_preprocessor_usi" type="scanlinerun" name="segment_left_velodyne" output="screen">
 <rosparam>
 point_topic: "/vstl/all_points"
 point_frame: "velodyne_tl"
 sensor_model: 32
-th_run: 1.25
-th_merge: 2.0
+th_run: 1.75
+th_merge: 2.5
 </rosparam>
 </node>
 

@@ -7,6 +7,8 @@ find_package(catkin REQUIRED COMPONENTS
   pcl_ros
   pcl_conversions
   velodyne_pointcloud
+  tf2
+  tf2_ros
 )
 
 catkin_package(CATKIN_DEPENDS

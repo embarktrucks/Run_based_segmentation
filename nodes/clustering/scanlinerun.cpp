@@ -605,7 +605,8 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
   if (laserCloud->points.size() > 0) {
     sensor_msgs::PointCloud2 cluster_msg;
     pcl::toROSMsg(*laserCloud, cluster_msg);
-    cluster_msg.header.frame_id = point_frame_;
+    //cluster_msg.header.frame_id = point_frame_;
+    cluster_msg.header = in_cloud_msg->header;
 
     cluster_points_pub_.publish(cluster_msg);
   }
