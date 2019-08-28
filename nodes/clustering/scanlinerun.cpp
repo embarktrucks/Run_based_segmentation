@@ -46,11 +46,17 @@ struct PointXYZIRL
 #define SLRPointXYZIRL scan_line_run::PointXYZIRL
 #define VPoint velodyne_pointcloud::PointXYZIR
 #define RUN pcl::PointCloud<SLRPointXYZIRL>
+
+// clang-format off
 // Register custom point struct according to PCL
 POINT_CLOUD_REGISTER_POINT_STRUCT(scan_line_run::PointXYZIRL,
-                                  (float, x, x)(float, y, y)(float, z, z)(
-                                      float, intensity, intensity)(uint16_t, ring,
-                                                                   ring)(uint16_t, label, label))
+                                  (float, x, x)
+                                  (float, y, y)
+                                  (float, z, z)
+                                  (float, intensity, intensity)
+                                  (uint16_t, ring, ring)
+                                  (uint16_t, label, label))
+// clang-format on
 
 #define dist(a, b) sqrt(((a).x - (b).x) * ((a).x - (b).x) + ((a).y - (b).y) * ((a).y - (b).y))
 
@@ -550,11 +556,6 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
            "min_dup. dist = %.8f max_dup. dist = %.8f",
            min_row, max_row, static_cast<int>(unique_rows.size()), num_collisions,
            num_non_ground_collisions, num_exact_duplicate, min_duplicate_dist, max_duplicate_dist);
-  //  for (int i = 0; i < 32; ++i) {
-  //    ROS_INFO("Ring: %d, unique rows: %lu, collisions: %d", i, unique_rows_per_ring[i].size(),
-  //             collisions_per_ring[i]);
-  //  }
-
 
   // Main processing
   for (int i = 0; i < sensor_model_; i++) {
@@ -605,7 +606,7 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
   if (laserCloud->points.size() > 0) {
     sensor_msgs::PointCloud2 cluster_msg;
     pcl::toROSMsg(*laserCloud, cluster_msg);
-    //cluster_msg.header.frame_id = point_frame_;
+    // cluster_msg.header.frame_id = point_frame_;
     cluster_msg.header = in_cloud_msg->header;
 
     cluster_points_pub_.publish(cluster_msg);

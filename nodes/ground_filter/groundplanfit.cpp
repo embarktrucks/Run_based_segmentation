@@ -46,11 +46,17 @@ struct PointXYZIRL
 #define SLRPointXYZIRL scan_line_run::PointXYZIRL
 #define VPoint velodyne_pointcloud::PointXYZIR
 #define RUN pcl::PointCloud<SLRPointXYZIRL>
+
+// clang-format off
 // Register custom point struct according to PCL
 POINT_CLOUD_REGISTER_POINT_STRUCT(scan_line_run::PointXYZIRL,
-                                  (float, x, x)(float, y, y)(float, z, z)(
-                                      float, intensity, intensity)(uint16_t, ring,
-                                                                   ring)(uint16_t, label, label))
+                                  (float, x, x)
+                                  (float, y, y)
+                                  (float, z, z)
+                                  (float, intensity, intensity)
+                                  (uint16_t, ring, ring)
+                                  (uint16_t, label, label))
+// clang-format on
 
 // using eigen lib
 #include <Eigen/Dense>
@@ -320,15 +326,15 @@ void GroundPlaneFit::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& 
   assert(laserCloudIn.points.size() == laserCloudIn_org.points.size());
   ROS_INFO("Processing %lu points", laserCloudIn.points.size());
 
-  Eigen::VectorXf x_ranges = Eigen::VectorXf::LinSpaced(num_seg_, 10*10, 100*100);
+  Eigen::VectorXf x_ranges = Eigen::VectorXf::LinSpaced(num_seg_, 10 * 10, 100 * 100);
 
   // size_t sz = laserCloudIn.points.size() / num_seg_;
   size_t start = 0;
   size_t sz = 0;
   for (int seg = 0; seg < num_seg_; ++seg) {
-    auto it =
-        std::upper_bound(laserCloudIn.points.cbegin(), laserCloudIn.points.cend(), x_ranges[seg],
-                         [](float cutoff, const VPoint& pnt) { return cutoff < pnt.x*pnt.x+pnt.y*pnt.y; });
+    auto it = std::upper_bound(
+        laserCloudIn.points.cbegin(), laserCloudIn.points.cend(), x_ranges[seg],
+        [](float cutoff, const VPoint& pnt) { return cutoff < pnt.x * pnt.x + pnt.y * pnt.y; });
     if (seg == num_seg_ - 1) {
       sz = (laserCloudIn.points.cend() - laserCloudIn.points.cbegin()) - start;
     } else {
