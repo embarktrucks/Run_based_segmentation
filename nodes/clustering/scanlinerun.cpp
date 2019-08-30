@@ -22,10 +22,14 @@
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl_ros/point_cloud.h>
+#include <ros/callback_queue.h>
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <velodyne_pointcloud/point_types.h>
 #include <visualization_msgs/MarkerArray.h>
+#include <boost/algorithm/clamp.hpp>
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
 
 using namespace std;
 
@@ -61,6 +65,8 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(scan_line_run::PointXYZIRL,
 #define dist(a, b) sqrt(((a).x - (b).x) * ((a).x - (b).x) + ((a).y - (b).y) * ((a).y - (b).y))
 
 const int ANGLE_BUCKETS = 2251;
+const std::string WINDOW_NAME = "VELO DEPTH";
+cv::Mat heat_map(5 * 32, ANGLE_BUCKETS / 2, CV_8UC3, cv::Scalar(0, 0, 0));
 
 /*
     @brief Scan Line Run ROS Node.
@@ -472,12 +478,6 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
   float max_duplicate_dist = 0.0;
   int n_prints = 0;
 
-  // For my peice of mind..
-  for (int scan_line = 0; scan_line < 32; ++scan_line) {
-    for (int row = 0; row < ANGLE_BUCKETS; ++row) {
-      assert(laser_frame_[scan_line][row].intensity == -1);
-    }
-  }
   ROS_INFO("PC size = %lu \"image\" size %d", laserCloudIn.points.size(), 32 * ANGLE_BUCKETS);
 
   // Fill in 2d grid of points (laser_frame_)
@@ -550,6 +550,32 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
       }
     }
   } // end for points
+
+  // Print an image of this
+  // cv::Mat image(5 * 32, ANGLE_BUCKETS / 2, CV_32FC1, cv::Scalar(-50));
+
+  // roll-our-own heatmap...
+  heat_map = cv::Scalar(0, 0, 0);
+  for (int ring = 0; ring < 32; ++ring) {
+    for (int row = 0; row < ANGLE_BUCKETS; row += 2) {
+      if (laser_frame_[ring][row].intensity != -1 && laser_frame_[ring][row].label != 1u) {
+        //        float height = boost::algorithm::clamp(laser_frame_[ring][row].z, -5, 5);
+        //        float t = (height + 5.) / 10.;
+        float range = std::sqrt(laser_frame_[ring][row].x * laser_frame_[ring][row].x +
+                                laser_frame_[ring][row].y * laser_frame_[ring][row].y);
+                                //laser_frame_[ring][row].z * laser_frame_[ring][row].z);
+        range = boost::algorithm::clamp(range, 0.0f, 50.0f);
+        float t = range/50.0f;
+        cv::Vec3b val = t * cv::Vec3b(0, 0, 255) + (1 - t) * cv::Vec3b(255, 0, 0);
+
+        for (int j = 0; j < 5; ++j) {
+          // image.at<float>(5 * ring + j, row) = height;
+          heat_map.at<cv::Vec3b>(5 * ring + j, row/2) = val;
+        }
+      }
+    }
+  }
+  cv::flip(heat_map, heat_map, 0); // flip vertically
 
   ROS_INFO("Min row: %d, max row: %d, unique rows: %d, collisions: %d (non ground: %d), exact "
            "duplicate: %d\n"
@@ -628,9 +654,21 @@ void ScanLineRun::velodyne_callback_(const sensor_msgs::PointCloud2ConstPtr& in_
 
 int main(int argc, char** argv)
 {
+  cv::namedWindow(WINDOW_NAME, cv::WINDOW_AUTOSIZE);
+  cv::moveWindow(WINDOW_NAME, 40, 900); // Move to a place we can see...
+
   ros::init(argc, argv, "ScanLineRun");
   ScanLineRun node;
-  ros::spin();
+
+  const ros::WallDuration timeout(0.1f);
+  while (ros::ok()) {
+    ros::getGlobalCallbackQueue()->callAvailable(timeout);
+
+    // So this doesn't time out when paused
+    cv::imshow(WINDOW_NAME, heat_map);
+    cv::waitKey(2);
+  }
+  // ros::spin();
 
   return 0;
 }

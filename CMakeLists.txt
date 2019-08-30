@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.5.1)
 project(points_preprocessor_usi)
 
 find_package(catkin REQUIRED COMPONENTS
@@ -8,8 +8,17 @@ find_package(catkin REQUIRED COMPONENTS
   pcl_conversions
   velodyne_pointcloud
   tf2
-  tf2_ros
+  tf2_ros  
 )
+
+# Why is it even linking against /opt/qt/latest???
+
+# Broken dependency chain in /opt/qt/latest/lib/Qt/lib/libQt5Test.so.5
+# /opt/qt/latest/lib/Qt/lib/libQt5Test.so.5: /usr/lib/x86_64-linux-gnu/libQt5Core.so.5: version `Qt_5.12' not found (required by /opt/qt/latest/lib/Qt/lib/libQt5Test.so.5)...
+find_package(OpenCV 3 COMPONENTS core highgui)
+
+# OpenCV seems to need qt? Doesn't help..
+# find_package(Qt5 COMPONENTS Core Gui REQUIRED)
 
 catkin_package(CATKIN_DEPENDS
 	sensor_msgs
@@ -21,6 +30,7 @@ catkin_package(CATKIN_DEPENDS
 ###########
 
 include_directories(
+#  ${OpenCV_INCLUDE_DIRS}
   ${catkin_INCLUDE_DIRS}
 )
 
@@ -65,6 +75,11 @@ target_include_directories(scanlinerun PRIVATE
 target_link_libraries(scanlinerun
 	${catkin_LIBRARIES}
 	${PCL_LIBRARIES}
+        ${OpenCV_LIBS}
+        # Link against not broken qt library...
+        /usr/lib/x86_64-linux-gnu/libQt5Test.so
+#        Qt5::Core
+#        Qt5::Gui
 )
 
 
