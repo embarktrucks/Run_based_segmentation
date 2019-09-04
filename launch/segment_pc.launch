@@ -12,6 +12,18 @@ point_frame: "velodyne_tl"
 sensor_model: 32
 th_run: 1.5
 th_merge: 0.75
+cluster: "/vstl/cluster"
+</rosparam>
+</node>
+
+<node pkg="points_preprocessor_usi" type="scanlinerun" name="segment_right_velodyne" output="screen">
+<rosparam>
+point_topic: "/vstr/all_points"
+point_frame: "velodyne_tr"
+sensor_model: 32
+th_run: 1.5
+th_merge: 0.75
+cluster: "/vstr/cluster"
 </rosparam>
 </node>
 
